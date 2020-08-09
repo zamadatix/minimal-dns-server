@@ -4,17 +4,18 @@ A bare-bones non recursive DNS server capable of hosting `A` or `AAAA` records. 
 
 Listens on all IPv4 and IPv6 interfaces by default. If you want v4 only modify the socket creation to `udp4`. If you want v6 only modify the socket creation to have the `ipv6Only` option which disables IPv4 mapped IPv6 addresses.
 
-Basic logging of errors and query logging (for valid queries) to `dns.log`.
+Basic logging of errors and query logging (for valid queries) to `/var/log/dns`.
 
-There is also a rudimentary service definition file for Open-RC you can drop in `/etc/init.d/`. To add to boot `rc-update add dns`
+There is also a rudimentary service definition file `dns` for Open-RC you can drop in `/etc/init.d/`. To add to boot `rc-update add dns`.
 
 ## Why
 
-Fun weekend project to remove another external dependency (BIND) from my self hosted infrastructure.
+Fun weekend project to remove another external dependency (BIND) from my personal self hosted infrastructure.
 
 ## Future plans
 I'd like to convert the code to Zig to remove the Node dependency and be a step closer to removing MUSL libc. Once that's done there are a few features I'd still like to add while keeping it minimal:
 
+- Be a little more forgiving and spec compliant to ensure support from all resolvers
 - Automatic generation of the record `a` and `aaaa` buffers from IP strings
 - Move the records file and logging configuration out of the source code and into a config file
 - Add support for TXT records (to work towards Let's Encrypt integration)
