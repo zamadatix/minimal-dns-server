@@ -1,0 +1,12 @@
+#!/sbin/openrc-run
+
+name="dns"
+command="/usr/bin/node"
+command_args="/opt/dns/dns.js --expose-gc"
+command_user="root"
+pidfile="/run/dns.pid"
+command_background="yes"
+
+depend() {
+    need net
+}
