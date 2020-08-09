@@ -6,15 +6,20 @@ const logging = true;
 const dgram = require("dgram");
 const server = dgram.createSocket("udp6");
 
+
 let fs;
 if(logging)
 {
 	fs = require("fs");
 }
 
-
 const log = async function(message)
 {
+	if(!logging)
+	{
+		return;
+	}
+
 	if(message.charAt(message.length - 1) !== "\n")
 	{
 		message = message + "\n";
@@ -22,15 +27,33 @@ const log = async function(message)
 
 	const timestamp = (Date.now()/1000).toString(10).padEnd(14, "0") + "    ";
 
-	fs.appendFile("dns.log", timestamp + message, function(){return;});
+	fs.appendFile("/var/log/dns", timestamp + message, function(error)
+	{
+		if(error)
+		{
+			console.error(error);
+		}
+
+		return;
+	});
 
 	return;
 }
 
-const sendResponse = function(responseBuffer, transactionIdentifier, clientInfo)
+
+const sendResponse = function(responseBuffer, queryType, transactionIdentifier, clientInfo)
 {
 	// Write the transaction ID to the response buffer so the client knows how to match it
 	responseBuffer.writeUInt16BE(transactionIdentifier, 0);
+
+	// The client's query gets sent back in the response to be referenced and must match exactly, including record type even if we send both A and AAAA anyways
+	let queryTypeByte = 0x01;
+	if(queryType === "aaaa")
+	{
+		queryTypeByte = 0x1C;
+	}
+	responseBuffer[responseBuffer.indexOf(0x00, 12) + 2] = queryTypeByte;
+
 
 	server.send(responseBuffer, clientInfo.port, clientInfo.address, function(error)
 	{
@@ -105,7 +128,7 @@ for(let index = 0; index < records.length; index++)
 	{
 		baseBuffer[11] = 0x01;
 	}
-	//                                                                 null for name  Type        IN          
+	//                                                                 null for name  Type A      IN          
 	baseBuffer = Buffer.concat([baseBuffer, records[index].buffer, Buffer.from([0x00, 0x00, 0x01, 0x00, 0x01])]);
 
 
@@ -124,7 +147,7 @@ for(let index = 0; index < records.length; index++)
 	
 	if(records[index].hasOwnProperty("aaaa"))
 	{
-		//                                       Name ptr    Type A      IN          TTL (300 seconds)       Data length
+		//                                       Name ptr    Type AAAA   IN          TTL (300 seconds)       Data length
 		aaaaAnswer = Buffer.concat([Buffer.from([0xC0, 0x0C, 0x00, 0x1C, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2C, 0x00, 0x10]), records[index].aaaa]);
 		aaaaResponse = Buffer.concat([baseBuffer, aaaaAnswer]);
 	}
@@ -149,10 +172,7 @@ for(let index = 0; index < records.length; index++)
 
 server.on("error", function(error)
 {
-	if(logging)
-	{
-		log(error.toString());
-	}
+	log(error.toString());
 
 	return;
 });
@@ -162,28 +182,24 @@ server.on("message", function(message, clientInfo)
 	// Check if it is something we don't want to respond to
 	if((message.length < 18) || (message.length > 269))
 	{
-		if(logging)
-		{
-			log("Long ass message ignored from [" + clientInfo.address + "]:" + clientInfo.port + "\n");
-		}
+		// If the message is this long we know it's got things we don't support. If shorter it's garbage.
 
 		return;
 	}
 
-	if((message[2] !== 0x01) ||
-	   (message[3] !== 0x00) ||
-	   (message[4] !== 0x00) ||
-	   (message[5] !== 0x01))
+	if((message[4] !== 0x00) || (message[5] !== 0x01))
 	{
 		// Not a standard query for a single record, ignore
 
 		return;
 	}
 
-	if((message[message.length - 4] !== 0x00) ||
-	  ((message[message.length - 3] !== 0x01) && (message[message.length - 3] !== 0x1C)) ||
-	   (message[message.length - 2] !== 0x00) ||
-	   (message[message.length - 1] !== 0x01))
+	const nullTerminator = message.indexOf(0x00, 12, "ascii");
+
+	if((message[nullTerminator + 1] !== 0x00) ||
+	  ((message[nullTerminator + 2] !== 0x01) && (message[nullTerminator + 2] !== 0x1C)) || // Allow A or AAAA
+	   (message[nullTerminator + 3] !== 0x00) ||
+	   (message[nullTerminator + 4] !== 0x01))
 	{
 		// Not an IN A or IN AAAA request, ignore
 
@@ -192,7 +208,7 @@ server.on("message", function(message, clientInfo)
 
 
 	let queryType;
-	if(message[message.length - 3] === 0x01)
+	if(message[nullTerminator + 2] === 0x01)
 	{
 		queryType = "a";
 	}
@@ -202,7 +218,7 @@ server.on("message", function(message, clientInfo)
 	}
 
 	// Extract the queried name including length but not the null terminator
-	const queryBuffer = message.slice(12, message.length - 5);
+	const queryBuffer = message.slice(12, nullTerminator);
 
 	// Compare it to all of the record buffers
 	let matched = false;
@@ -215,12 +231,9 @@ server.on("message", function(message, clientInfo)
 			if(records[index].hasOwnProperty(queryType))
 			{
 				matched = true;
-				if(logging)
-				{
-					log("Received " + queryType + " query for " + records[index].name + " from [" + clientInfo.address + "]:" + (clientInfo.port).toString());
-				}
+				log("Received " + queryType + " query for " + records[index].name + " from [" + clientInfo.address + "]:" + (clientInfo.port).toString());
 
-				sendResponse(records[index][queryType + "Response"], message.readUInt16BE(0), clientInfo);
+				sendResponse(records[index][queryType + "Response"], queryType, message.readUInt16BE(0), clientInfo);
 			}
 			
 			// Either way that's all she wrote
@@ -233,10 +246,7 @@ server.on("message", function(message, clientInfo)
 
 server.on("listening", function(message)
 {
-	if(logging)
-	{
-		log("Listening on [" + server.address().address + "]:" + server.address().port);
-	}
+	log("Listening on [" + server.address().address + "]:" + server.address().port);
 
 	return;
 });
